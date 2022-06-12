@@ -1,4 +1,4 @@
-import pickle
+fimport pickle
 import pandas as pd 
 
 from NameModules.Taiwan_name_seperate import GetFirstName
