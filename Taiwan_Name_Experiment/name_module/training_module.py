@@ -71,7 +71,7 @@ def w2v_normalize(sampled_df, w2v_feature):
     return sampled_df
 
 
-def name_gender_count(df):
+def name_gender_count(df, random_gender_for_same_count):
     """ 用來扣掉同名字但有不同性別存在的名字
         name_gender_dict內大於0的就是男生,反之女生,0則男女各半
 
@@ -85,6 +85,15 @@ def name_gender_count(df):
     for name, gender in zip(df.FirstName, df.gender):
         male_score = gender if gender == 1 else -1
         name_gender_dict[name] = name_gender_dict.get(name, 0) + male_score
+
+    if random_gender_for_same_count:
+        for name in name_gender_dict:
+            # 中性名字沒分第三類別,直接任塞一性別
+            if name_gender_dict[name] == 0:
+                if random.randint(0, 1) == 0:
+                    name_gender_dict[name] = -1
+                else:
+                    name_gender_dict[name] = 1
 
     return name_gender_dict
 
@@ -228,11 +237,12 @@ def get_name_in_year_range_count(df_index, data_df, year_column):
     Args:
         df_index (index): index of selected sample
         data_df (pd.DataFrame): name dataframe
-        year_column (str): 
+        year_column (str): birth year column name
 
     Returns:
-        name_in_year_range_count ()
+        name_in_year_range_count (dict): name count in every year range
     """
+
     name_in_year_range_count = {}
     for index in df_index:
         first_name = data_df.loc[index, 'FirstName']
@@ -247,12 +257,21 @@ def get_name_in_year_range_count(df_index, data_df, year_column):
 
 
 def get_min_distance(year_range, answer_ranges, birth_year_base):
+    """ get min distance between year_range and answer_ranges.
+
+    Args:
+        year_range (int): predicted year range
+        answer_ranges (list): answer year ranges
+        birth_year_base (int): base year of birth year
+
+    Returns:
+        smallest_dist (int): smallest dist to exact birth year
+    """
     smallest_dist = 999
     predict_year = birth_year_base + year_range * 5
-
     for answer_range in answer_ranges:
         answer_range = int(answer_range)
-        if answer_range > year_range:
+        if answer_range > predict_year:
             closest_answer_year = predict_year + 4
         else:
             closest_answer_year = predict_year
@@ -263,14 +282,26 @@ def get_min_distance(year_range, answer_ranges, birth_year_base):
 
 
 def get_average_dist_error_and_multi_accuracy(df_index, predictions, sampled_df, birth_year_base):
+    """ get average distance error and multi accuracy.
+
+    Args:
+        df_index (index): data set index
+        predictions (list): predicted year range
+        sampled_df (pd.DataFrame): sampled dataframe
+        birth_year_base (int): birth year base
+
+    Returns:
+        average_dist_error (float): averge distance error
+        multi_accuracy (float): accuracy of multi answer
+    """
     dist_error = 0
     multi_answer_accuracy = 0
 
     test_names = sampled_df.loc[df_index].FirstName.values
     name_in_year_range_count = get_name_in_year_range_count(
-        df_index, sampled_df, 'BirthYear')
+        df_index, sampled_df, 'BirthYear')  # 2
     name_in_year_count = get_name_in_year_range_count(
-        df_index, sampled_df, 'message')
+        df_index, sampled_df, 'message')    # 1952
 
     print("dataset 有{}個名字 {}種名字".format(
         len(df_index), len(name_in_year_range_count)))
@@ -278,7 +309,7 @@ def get_average_dist_error_and_multi_accuracy(df_index, predictions, sampled_df,
     for test_name, predict_year_range in zip(test_names, predictions):
         if test_name in name_in_year_range_count:
             if predict_year_range in name_in_year_range_count[test_name]:
-                # 若test name 所有叫宜欣的年齡分布是   1=3個  2=6個  7=8個  9=1個人
+                # 若test name 所有叫家豪的年齡分布是   1=3個  2=6個  7=8個  9=1個人
                 multi_answer_accuracy += 1
             else:
                 # 計算錯誤，把平均絕對值誤差加上去
@@ -299,7 +330,7 @@ def sample_name_df(df, sample_number, birth_years, ignore_index):
     """
     sampled_df = pd.DataFrame()
     for birth_year in birth_years:
-        sampled_df = pd.concat([sampled_df, df[df["BirthYear"].apply(lambda x: x == birth_year)].sample(
+        sampled_df = pd.concat([sampled_df, df[df["BirthYear"] == birth_year].sample(
             n=sample_number, frac=None, replace=True, weights=None, random_state=np.random.RandomState(), axis=0)],
             ignore_index=ignore_index)
     return sampled_df
@@ -322,7 +353,8 @@ def merge_birth_year(birth_year, head, tail):
 
 def train_birth_year_model(name_df, do_first_name_augmentation, validation_times,
                            feature_combinations, birth_year_base, target_names,
-                           save_path, model_name, birth_years, sample_number):
+                           save_path, model_name, birth_years, sample_number,
+                           estimators_num, min_samples_leaf_num):
     """ Train birth year model.
 
     Args:
@@ -336,6 +368,8 @@ def train_birth_year_model(name_df, do_first_name_augmentation, validation_times
         model_name (str): model name to save.
         birth_years (list): selected birth years range to train.
         sample_number (int): sample number for each birth year range.
+        estimators_num (int): estimators number for RandomForestClassifier.
+        min_samples_leaf_num (int): min samples leaf number for RandomForestClassifier.
 
     Returns:
         result_df (pd.DataFrame): result dataframe.
@@ -359,7 +393,7 @@ def train_birth_year_model(name_df, do_first_name_augmentation, validation_times
 
     for i, feature in enumerate(feature_combinations):
         sampled_df = sample_name_df(name_df, sample_number, birth_years, True)
-        print(sampled_df.shape, len(birth_years))
+        print("Dataset shape", sampled_df.shape, len(birth_years))
 
         x_feature = get_x_feature(feature, sampled_df.columns)
         feature_category = ''.join([x[0].upper() for x in feature]).upper()
@@ -377,7 +411,7 @@ def train_birth_year_model(name_df, do_first_name_augmentation, validation_times
                     sampled_df.drop(dev_df.index), 0.7, x_feature, y_feature)
             # Create random forest classifier instance
             trained_model = random_forest_classifier(
-                train_x, train_y.values.reshape(-1, 1).ravel(), estimators_num=64, min_samples_leaf_num=1)
+                train_x, train_y.values.reshape(-1, 1).ravel(), estimators_num, min_samples_leaf_num)
             print('Finished training')
 
             for item in ("Train", "Test", "Development"):
@@ -419,7 +453,7 @@ def train_birth_year_model(name_df, do_first_name_augmentation, validation_times
                 result_all["micro_F1"].append(micro_f1)
 
                 # if item == "Development":
-                print("report:\n", classification_report(
+                print("Report:\n", classification_report(
                     y_true, y_pred, target_names=target_names))
 
         result_df = pd.DataFrame(result_all)
