@@ -155,7 +155,7 @@ def random_forest_classifier(features, target, estimators_num=32,  min_samples_l
     :return: trained random forest classifier
     """
     clf = RandomForestClassifier(
-        n_estimators=estimators_num, n_jobs=4, min_samples_leaf=min_samples_leaf_num, random_state=42)
+        n_estimators=estimators_num, n_jobs=4, min_samples_leaf=min_samples_leaf_num)
     print('estimators_num = ', estimators_num, 'min_samples_leaf_num = ',
           min_samples_leaf_num, "Training Data len = ", len(features))
     clf.fit(features, target)

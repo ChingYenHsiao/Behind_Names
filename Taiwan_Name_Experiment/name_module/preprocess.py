@@ -1,12 +1,12 @@
+import pickle
+import traceback
+import pandas as pd
 from gensim.models import word2vec
 from hanziconv import HanziConv
+
 from name_module.share_lib import is_number, is_chinese, reduce_mem_usage
 from name_module.Chinese_name_separate import *
 from name_module.fortune_map_calculate import *
-import pickle
-import pandas as pd
-import traceback
-from pathlib import Path as plib_path
 
 
 def drop_dirty_name(name_df, fb_name_df=pd.DataFrame()):
@@ -191,7 +191,7 @@ def get_first_name_word_vector(vector_model, first_name, index, wv_index, synony
     return add_word_vector(vector_model, character, wv_index, synonyms, w2v_mean)
 
 
-def add_w2v_feature(name_df, w2v_vector_number, synonyms, w2v_mean):
+def add_w2v_feature(moe_model, name_df, w2v_vector_number, synonyms, w2v_mean):
     """ Use pretrained word2vec to add word embedding feature.
 
     Args:
@@ -205,26 +205,18 @@ def add_w2v_feature(name_df, w2v_vector_number, synonyms, w2v_mean):
         w2v_feature_columns (list): w2v feature columns
     """
 
-    '''
-     pretrained word2vec model, used wiki doc and moe dictionary word2vec
-     every entry is a Chinese character, not a word
-    '''
-    moe_model = word2vec.Word2Vec.load("./w2v_data/wiki_moe_100_model.bin")
-
     for wv_index in range(0, w2v_vector_number):
-        name_df['FN1_wv_{}'.format(wv_index)] = name_df["FirstName"].apply(
-            lambda x:  get_first_name_word_vector(moe_model, x, 0, wv_index, synonyms, w2v_mean))
-        name_df['FN2_wv_{}'.format(wv_index)] = name_df["FirstName"].apply(
-            lambda x:  get_first_name_word_vector(moe_model, x, 1, wv_index, synonyms, w2v_mean))
-
-    name_df, na_list = reduce_mem_usage(name_df)
+        name_df[f'FN1_wv_{wv_index}'] = name_df["FirstName"].apply(lambda x: get_first_name_word_vector(
+            moe_model, x, 0, wv_index, synonyms, w2v_mean))
+        name_df[f'FN2_wv_{wv_index}'] = name_df["FirstName"].apply(lambda x: get_first_name_word_vector(
+            moe_model, x, 1, wv_index, synonyms, w2v_mean))
 
     w2v_feature = get_x_feature(['W2V'], name_df.columns)
     print("w2v_feature len", len(w2v_feature))
     return name_df, w2v_feature
 
 
-def seperate_pinyin(pinyin, vowels):
+def separate_pinyin(pinyin, vowels):
     """ Seperate pinyin to vowel and consonant.
 
     Args:
@@ -271,7 +263,7 @@ def get_vowel_consonant(term, vowels, moe_data_dict, special_word_dict):
             for hete in moe_data_dict[term]['heteronyms']:
                 pinyin = hete.get('pinyin', None)
                 if pinyin is not None:
-                    vowel, consonant = seperate_pinyin(pinyin, vowels)
+                    vowel, consonant = separate_pinyin(pinyin, vowels)
                     return vowel, consonant
 
                 # 找不到字音，看是否是哪個字的異體字
@@ -284,7 +276,7 @@ def get_vowel_consonant(term, vowels, moe_data_dict, special_word_dict):
                         for alter_hete in moe_data_dict[alter_term]['heteronyms']:
                             pinyin = alter_hete.get('pinyin', None)
                             if pinyin is not None:
-                                vowel, consonant = seperate_pinyin(
+                                vowel, consonant = separate_pinyin(
                                     pinyin, vowels)
                                 return vowel, consonant
             # print('在字典內但沒有拼音：',term)
@@ -293,7 +285,7 @@ def get_vowel_consonant(term, vowels, moe_data_dict, special_word_dict):
             if term in special_word_dict:
                 pinyin = special_word_dict[term].get('pinyin', None)
                 if pinyin is not None:
-                    vowel, consonant = seperate_pinyin(pinyin, vowels)
+                    vowel, consonant = separate_pinyin(pinyin, vowels)
                     return vowel, consonant
             else:
                 print('拼音不明：', term)
@@ -320,15 +312,17 @@ def add_phonetic_feature(name_df, vowels, moe_data_dict, special_word_pinyin_dic
         character_consonant = []
         character_vowel = []
         for name in name_df["FirstName"].values:
+            if len(name) == 1:
+                name = " " + name
             character = name[i - 1]
             vowel, consonant = get_vowel_consonant(
                 character, vowels, moe_data_dict, special_word_pinyin_dic)
             character_consonant.append(consonant)
             character_vowel.append(vowel)
-        name_df["FN{}_Consonant".format(i)] = character_consonant
-        name_df["FN{}_Vowel".format(i)] = character_vowel
-        one_hot_columns.append("FN{}_Consonant".format(i))
-        one_hot_columns.append("FN{}_Vowel".format(i))
+        name_df[f"FN{i}_Consonant"] = character_consonant
+        name_df[f"FN{i}_Vowel"] = character_vowel
+        one_hot_columns.append(f"FN{i}_Consonant")
+        one_hot_columns.append(f"FN{i}_Vowel")
 
     name_df = pd.get_dummies(name_df, columns=one_hot_columns)
     phonetic_feature = get_x_feature(['Phonetic'], name_df.columns)
@@ -430,18 +424,19 @@ def add_uni_gram(character, all_character_in_name):
 def preprocess(name_df, save_path=None, file_name=None):
     name_df = drop_dirty_name(name_df)
 
-    """
-    Add name feature
-    """
+    #  Add name feature
     all_character_in_name, moe_data_dict, synonyms_dict, consonants, vowels, special_word_dict = load_saved_files()
 
     try:
         # W2V
         print("Add W2V feature")
+        # pretrained word2vec model, used wiki doc and moe dictionary word2vec
+        # every entry is a Chinese character, not a word.
         moe_model = word2vec.Word2Vec.load("./w2v_data/wiki_moe_100_model.bin")
         vector_mean = turn_all_word_in_w2v_model_to_dataframe(moe_model).mean()
         name_df, w2v_feature = add_w2v_feature(
-            name_df, w2v_vector_number=100, synonyms=synonyms_dict, w2v_mean=vector_mean)
+            moe_model, name_df, w2v_vector_number=100,
+            synonyms=synonyms_dict, w2v_mean=vector_mean)
 
         # Phonetic - one-hot encoding
         print("Add phonetic feature")
